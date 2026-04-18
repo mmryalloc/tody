@@ -1,0 +1,19 @@
+package entity
+
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrUserNotFound = errors.New("user not found")
+	ErrUserExists   = errors.New("user already exists")
+)
+
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}

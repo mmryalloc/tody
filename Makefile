@@ -25,6 +25,9 @@ tidy:
 test:
 	go test ./... -v
 
+vet:
+	go vet ./...
+
 # Database
 migrate-up:
 	@migrate -path $(MIGRATIONS) -database "$(DB_URL)" up

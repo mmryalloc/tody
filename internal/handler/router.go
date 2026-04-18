@@ -3,12 +3,16 @@ package handler
 import "net/http"
 
 type Router struct {
-	task *TaskHandler
+	task   *TaskHandler
+	auth   *AuthHandler
+	parser TokenParser
 }
 
-func NewRouter(taskHandler *TaskHandler) *Router {
+func NewRouter(taskHandler *TaskHandler, authHandler *AuthHandler, parser TokenParser) *Router {
 	return &Router{
-		task: taskHandler,
+		task:   taskHandler,
+		auth:   authHandler,
+		parser: parser,
 	}
 }
 
@@ -23,11 +27,19 @@ func (r *Router) Setup() http.Handler {
 		w.Write([]byte(`{"status": "ok"}`))
 	})
 
-	mux.HandleFunc("POST "+v1+"/tasks", r.task.CreateTask)
-	mux.HandleFunc("GET "+v1+"/tasks", r.task.ListTasks)
-	mux.HandleFunc("GET "+v1+"/tasks/{id}", r.task.GetTask)
-	mux.HandleFunc("PUT "+v1+"/tasks/{id}", r.task.UpdateTask)
-	mux.HandleFunc("DELETE "+v1+"/tasks/{id}", r.task.DeleteTask)
+	requireAuth := RequireAuth(r.parser)
 
-	return mux
+	mux.HandleFunc("POST "+v1+"/auth/register", r.auth.Register)
+	mux.HandleFunc("POST "+v1+"/auth/login", r.auth.Login)
+	mux.HandleFunc("POST "+v1+"/auth/refresh", r.auth.Refresh)
+	mux.HandleFunc("POST "+v1+"/auth/logout", r.auth.Logout)
+	mux.Handle("POST "+v1+"/auth/logout-all", requireAuth(http.HandlerFunc(r.auth.LogoutAll)))
+
+	mux.Handle("POST "+v1+"/tasks", requireAuth(http.HandlerFunc(r.task.CreateTask)))
+	mux.Handle("GET "+v1+"/tasks", requireAuth(http.HandlerFunc(r.task.ListTasks)))
+	mux.Handle("GET "+v1+"/tasks/{id}", requireAuth(http.HandlerFunc(r.task.GetTask)))
+	mux.Handle("PUT "+v1+"/tasks/{id}", requireAuth(http.HandlerFunc(r.task.UpdateTask)))
+	mux.Handle("DELETE "+v1+"/tasks/{id}", requireAuth(http.HandlerFunc(r.task.DeleteTask)))
+
+	return Recover(mux)
 }

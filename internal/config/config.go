@@ -12,7 +12,9 @@ import (
 type Config struct {
 	App      AppConfig
 	Database DatabaseConfig
+	Redis    RedisConfig
 	JWT      JWTConfig
+	Cookie   CookieConfig
 }
 
 type AppConfig struct {
@@ -40,11 +42,27 @@ func (d *DatabaseConfig) DSN() string {
 	)
 }
 
+type RedisConfig struct {
+	Host     string
+	Port     string
+	Password string
+	DB       int
+}
+
+func (r *RedisConfig) Addr() string {
+	return r.Host + ":" + r.Port
+}
+
 type JWTConfig struct {
 	AccessSecret    string
-	RefreshSecret   string
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	Issuer          string
+}
+
+type CookieConfig struct {
+	Domain string
+	Secure bool
 }
 
 func Load() (*Config, error) {
@@ -53,9 +71,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load env: %w", err)
 	}
 
+	env := getEnv("APP_ENV", "development")
+
 	cfg := &Config{
 		App: AppConfig{
-			Env:     getEnv("APP_ENV", "development"),
+			Env:     env,
 			Port:    getEnv("APP_PORT", "8080"),
 			BaseURL: getEnv("APP_BASE_URL", "http://localhost:8080"),
 		},
@@ -70,11 +90,21 @@ func Load() (*Config, error) {
 			MaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: getEnvDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute),
 		},
+		Redis: RedisConfig{
+			Host:     getEnv("REDIS_HOST", "localhost"),
+			Port:     getEnv("REDIS_PORT", "6379"),
+			Password: getEnv("REDIS_PASSWORD", ""),
+			DB:       getEnvInt("REDIS_DB", 0),
+		},
 		JWT: JWTConfig{
 			AccessSecret:    getEnv("JWT_ACCESS_SECRET", "change-me-access-secret"),
-			RefreshSecret:   getEnv("JWT_REFRESH_SECRET", "change-me-refresh-secret"),
 			AccessTokenTTL:  getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
-			RefreshTokenTTL: getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+			RefreshTokenTTL: getEnvDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
+			Issuer:          getEnv("JWT_ISSUER", "todo-app"),
+		},
+		Cookie: CookieConfig{
+			Domain: getEnv("COOKIE_DOMAIN", ""),
+			Secure: getEnvBool("COOKIE_SECURE", env == "production"),
 		},
 	}
 
@@ -100,8 +130,8 @@ func (c *Config) validate() error {
 		if c.JWT.AccessSecret == "change-me-access-secret" {
 			return fmt.Errorf("JWT_ACCESS_SECRET must be changed in production")
 		}
-		if c.JWT.RefreshSecret == "change-me-refresh-secret" {
-			return fmt.Errorf("JWT_REFRESH_SECRET must be changed in production")
+		if !c.Cookie.Secure {
+			return fmt.Errorf("COOKIE_SECURE must be true in production")
 		}
 	}
 	return nil
@@ -118,6 +148,15 @@ func getEnvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

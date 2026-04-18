@@ -19,10 +19,10 @@ type UpdateTaskInput struct {
 
 type TaskRepository interface {
 	Create(ctx context.Context, t *entity.Task) error
-	List(ctx context.Context, limit, offset int) ([]entity.Task, int, error)
-	GetByID(ctx context.Context, id int64) (entity.Task, error)
+	List(ctx context.Context, userID int64, limit, offset int) ([]entity.Task, int, error)
+	GetByID(ctx context.Context, userID, id int64) (entity.Task, error)
 	Update(ctx context.Context, t *entity.Task) error
-	Delete(ctx context.Context, id int64) error
+	Delete(ctx context.Context, userID, id int64) error
 }
 
 type taskService struct {
@@ -35,8 +35,9 @@ func NewTaskService(repo TaskRepository) *taskService {
 	}
 }
 
-func (s *taskService) CreateTask(ctx context.Context, t CreateTaskInput) (entity.Task, error) {
+func (s *taskService) CreateTask(ctx context.Context, userID int64, t CreateTaskInput) (entity.Task, error) {
 	task := entity.Task{
+		UserID:      userID,
 		Title:       t.Title,
 		Description: t.Description,
 	}
@@ -46,24 +47,27 @@ func (s *taskService) CreateTask(ctx context.Context, t CreateTaskInput) (entity
 	return task, nil
 }
 
-func (s *taskService) ListTasks(ctx context.Context, page, limit int) ([]entity.Task, int, error) {
+func (s *taskService) ListTasks(ctx context.Context, userID int64, page, limit int) ([]entity.Task, int, error) {
 	if page < 1 {
 		page = 1
 	}
-	if limit < 1 || limit > 100 {
+	if limit < 1 {
 		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 
-	return s.repo.List(ctx, limit, offset)
+	return s.repo.List(ctx, userID, limit, offset)
 }
 
-func (s *taskService) GetTask(ctx context.Context, id int64) (entity.Task, error) {
-	return s.repo.GetByID(ctx, id)
+func (s *taskService) GetTask(ctx context.Context, userID, id int64) (entity.Task, error) {
+	return s.repo.GetByID(ctx, userID, id)
 }
 
-func (s *taskService) UpdateTask(ctx context.Context, id int64, in UpdateTaskInput) (entity.Task, error) {
-	task, err := s.repo.GetByID(ctx, id)
+func (s *taskService) UpdateTask(ctx context.Context, userID, id int64, in UpdateTaskInput) (entity.Task, error) {
+	task, err := s.repo.GetByID(ctx, userID, id)
 	if err != nil {
 		return entity.Task{}, err
 	}
@@ -85,6 +89,6 @@ func (s *taskService) UpdateTask(ctx context.Context, id int64, in UpdateTaskInp
 	return task, nil
 }
 
-func (s *taskService) DeleteTask(ctx context.Context, id int64) error {
-	return s.repo.Delete(ctx, id)
+func (s *taskService) DeleteTask(ctx context.Context, userID, id int64) error {
+	return s.repo.Delete(ctx, userID, id)
 }

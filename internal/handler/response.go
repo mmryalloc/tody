@@ -9,6 +9,8 @@ const (
 	errorCodeValidation    = "validation_error"
 	errorCodeInternalError = "internal_error"
 	errorCodeNotFound      = "not_found"
+	errorCodeUnauthorized  = "unauthorized"
+	errorCodeConflict      = "conflict"
 )
 
 type envelope struct {
@@ -103,6 +105,26 @@ func notFound(w http.ResponseWriter, msg string) {
 		Success: false,
 		Error: &errorBody{
 			Code:    errorCodeNotFound,
+			Message: msg,
+		},
+	})
+}
+
+func unauthorized(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusUnauthorized, envelope{
+		Success: false,
+		Error: &errorBody{
+			Code:    errorCodeUnauthorized,
+			Message: msg,
+		},
+	})
+}
+
+func conflict(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusConflict, envelope{
+		Success: false,
+		Error: &errorBody{
+			Code:    errorCodeConflict,
 			Message: msg,
 		},
 	})

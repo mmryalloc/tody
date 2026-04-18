@@ -12,10 +12,12 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/mmryalloc/todo-app/internal/auth"
 	"github.com/mmryalloc/todo-app/internal/config"
 	"github.com/mmryalloc/todo-app/internal/handler"
 	"github.com/mmryalloc/todo-app/internal/repository"
 	"github.com/mmryalloc/todo-app/internal/service"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -37,11 +39,37 @@ func main() {
 		os.Exit(1)
 	}
 
-	taskRepo := repository.NewTaskRepository(db)
-	taskSvc := service.NewTaskService(taskRepo)
-	taskHandler := handler.NewTaskHandler(taskSvc)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer rdb.Close()
 
-	r := handler.NewRouter(taskHandler)
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		slog.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+
+	jwtManager := auth.NewJWTManager(cfg.JWT.AccessSecret, cfg.JWT.AccessTokenTTL, cfg.JWT.Issuer)
+
+	taskRepo := repository.NewTaskRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	sessionRepo := repository.NewSessionRepository(rdb)
+
+	taskSvc := service.NewTaskService(taskRepo)
+	authSvc := service.NewAuthService(userRepo, sessionRepo, jwtManager, cfg.JWT.RefreshTokenTTL)
+
+	taskHandler := handler.NewTaskHandler(taskSvc)
+	authHandler := handler.NewAuthHandler(
+		authSvc,
+		cfg.Cookie.Secure,
+		cfg.Cookie.Domain,
+		cfg.JWT.AccessTokenTTL,
+		cfg.JWT.RefreshTokenTTL,
+	)
+
+	r := handler.NewRouter(taskHandler, authHandler, jwtManager)
 	h := r.Setup()
 
 	addr := ":" + cfg.App.Port

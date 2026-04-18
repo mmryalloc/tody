@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/mmryalloc/todo-app/internal/entity"
@@ -20,18 +21,18 @@ func NewTaskRepository(db *sql.DB) *taskRepository {
 
 func (r *taskRepository) Create(ctx context.Context, t *entity.Task) error {
 	query := `
-		INSERT INTO tasks (title, description, completed)
-		VALUES ($1, $2, $3)
-		RETURNING id
+		INSERT INTO tasks (user_id, title, description, completed)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at, updated_at
 	`
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
+		t.UserID,
 		t.Title,
 		t.Description,
 		t.Completed,
-	).Scan(&t.ID)
-
+	).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("repository task create: %w", err)
 	}
@@ -39,29 +40,31 @@ func (r *taskRepository) Create(ctx context.Context, t *entity.Task) error {
 	return nil
 }
 
-func (r *taskRepository) List(ctx context.Context, limit, offset int) ([]entity.Task, int, error) {
-	var total int
-	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&total)
-	if err != nil {
-		return nil, 0, fmt.Errorf("repository task list count: %w", err)
-	}
-
+func (r *taskRepository) List(ctx context.Context, userID int64, limit, offset int) ([]entity.Task, int, error) {
 	query := `
-		SELECT id, title, description, completed, created_at, updated_at
+		SELECT id, user_id, title, description, completed, created_at, updated_at,
+		       COUNT(*) OVER () AS total
 		FROM tasks
+		WHERE user_id = $1
 		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2
+		LIMIT $2 OFFSET $3
 	`
-	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("repository task list: %w", err)
 	}
 	defer rows.Close()
 
-	tasks := []entity.Task{}
+	var (
+		tasks = []entity.Task{}
+		total int
+	)
 	for rows.Next() {
 		var t entity.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Completed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&t.ID, &t.UserID, &t.Title, &t.Description, &t.Completed,
+			&t.CreatedAt, &t.UpdatedAt, &total,
+		); err != nil {
 			return nil, 0, fmt.Errorf("repository task list scan: %w", err)
 		}
 		tasks = append(tasks, t)
@@ -70,22 +73,30 @@ func (r *taskRepository) List(ctx context.Context, limit, offset int) ([]entity.
 		return nil, 0, fmt.Errorf("repository task list iteration: %w", err)
 	}
 
+	if len(tasks) == 0 {
+		if err := r.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM tasks WHERE user_id = $1`, userID,
+		).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("repository task list count: %w", err)
+		}
+	}
+
 	return tasks, total, nil
 }
 
-func (r *taskRepository) GetByID(ctx context.Context, id int64) (entity.Task, error) {
+func (r *taskRepository) GetByID(ctx context.Context, userID, id int64) (entity.Task, error) {
 	query := `
-		SELECT id, title, description, completed, created_at, updated_at
+		SELECT id, user_id, title, description, completed, created_at, updated_at
 		FROM tasks
-		WHERE id = $1
+		WHERE id = $1 AND user_id = $2
 	`
 	var t entity.Task
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&t.ID, &t.Title, &t.Description, &t.Completed, &t.CreatedAt, &t.UpdatedAt,
+	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
+		&t.ID, &t.UserID, &t.Title, &t.Description, &t.Completed, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return entity.Task{}, fmt.Errorf("repository task get: not found: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return entity.Task{}, entity.ErrTaskNotFound
 		}
 		return entity.Task{}, fmt.Errorf("repository task get: %w", err)
 	}
@@ -97,7 +108,7 @@ func (r *taskRepository) Update(ctx context.Context, t *entity.Task) error {
 	query := `
 		UPDATE tasks
 		SET title = $1, description = $2, completed = $3, updated_at = NOW()
-		WHERE id = $4
+		WHERE id = $4 AND user_id = $5
 		RETURNING updated_at
 	`
 	err := r.db.QueryRowContext(
@@ -107,11 +118,12 @@ func (r *taskRepository) Update(ctx context.Context, t *entity.Task) error {
 		t.Description,
 		t.Completed,
 		t.ID,
+		t.UserID,
 	).Scan(&t.UpdatedAt)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("repository task update: not found: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return entity.ErrTaskNotFound
 		}
 		return fmt.Errorf("repository task update: %w", err)
 	}
@@ -119,9 +131,9 @@ func (r *taskRepository) Update(ctx context.Context, t *entity.Task) error {
 	return nil
 }
 
-func (r *taskRepository) Delete(ctx context.Context, id int64) error {
-	query := `DELETE FROM tasks WHERE id = $1`
-	res, err := r.db.ExecContext(ctx, query, id)
+func (r *taskRepository) Delete(ctx context.Context, userID, id int64) error {
+	query := `DELETE FROM tasks WHERE id = $1 AND user_id = $2`
+	res, err := r.db.ExecContext(ctx, query, id, userID)
 	if err != nil {
 		return fmt.Errorf("repository task delete: %w", err)
 	}
@@ -131,7 +143,7 @@ func (r *taskRepository) Delete(ctx context.Context, id int64) error {
 		return fmt.Errorf("repository task delete rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("repository task delete: not found: %w", sql.ErrNoRows)
+		return entity.ErrTaskNotFound
 	}
 
 	return nil
