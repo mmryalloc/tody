@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:18.1-alpine
+    container_name: todo-app-db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - todo-app-backend
+
+volumes:
+  db-data:
+
+networks:
+  todo-app-backend:
+    driver: bridge
