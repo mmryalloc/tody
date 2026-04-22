@@ -27,13 +27,18 @@ func (r *Router) Setup() http.Handler {
 		w.Write([]byte(`{"status": "ok"}`))
 	})
 
-	requireAuth := RequireAuth(r.parser)
+	requireAuth := requireAuth(r.parser)
 
 	mux.HandleFunc("POST "+v1+"/auth/register", r.auth.Register)
 	mux.HandleFunc("POST "+v1+"/auth/login", r.auth.Login)
 	mux.HandleFunc("POST "+v1+"/auth/refresh", r.auth.Refresh)
 	mux.HandleFunc("POST "+v1+"/auth/logout", r.auth.Logout)
 	mux.Handle("POST "+v1+"/auth/logout-all", requireAuth(http.HandlerFunc(r.auth.LogoutAll)))
+	mux.Handle("PUT "+v1+"/auth/password", requireAuth(http.HandlerFunc(r.auth.ChangePassword)))
+
+	mux.Handle("GET "+v1+"/users/me", requireAuth(http.HandlerFunc(r.auth.GetMe)))
+	mux.Handle("PUT "+v1+"/users/me", requireAuth(http.HandlerFunc(r.auth.UpdateMe)))
+	mux.Handle("DELETE "+v1+"/users/me", requireAuth(http.HandlerFunc(r.auth.DeleteMe)))
 
 	mux.Handle("POST "+v1+"/tasks", requireAuth(http.HandlerFunc(r.task.CreateTask)))
 	mux.Handle("GET "+v1+"/tasks", requireAuth(http.HandlerFunc(r.task.ListTasks)))
@@ -41,5 +46,5 @@ func (r *Router) Setup() http.Handler {
 	mux.Handle("PUT "+v1+"/tasks/{id}", requireAuth(http.HandlerFunc(r.task.UpdateTask)))
 	mux.Handle("DELETE "+v1+"/tasks/{id}", requireAuth(http.HandlerFunc(r.task.DeleteTask)))
 
-	return Recover(mux)
+	return recoverMiddleware(mux)
 }

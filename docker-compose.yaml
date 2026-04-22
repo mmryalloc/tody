@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:18.1-alpine
-    container_name: todo-app-db
+    container_name: tody-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -12,7 +12,7 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
     networks:
-      - todo-app-backend
+      - tody-backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -22,7 +22,7 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    container_name: todo-app-redis
+    container_name: tody-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -30,7 +30,7 @@ services:
     volumes:
       - redis-data:/data
     networks:
-      - todo-app-backend
+      - tody-backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -51,5 +51,5 @@ volumes:
   redis-data:
 
 networks:
-  todo-app-backend:
+  tody-backend:
     driver: bridge

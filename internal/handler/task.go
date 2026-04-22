@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/mmryalloc/todo-app/internal/auth"
-	"github.com/mmryalloc/todo-app/internal/entity"
-	"github.com/mmryalloc/todo-app/internal/service"
+	"github.com/mmryalloc/tody/internal/auth"
+	"github.com/mmryalloc/tody/internal/entity"
+	"github.com/mmryalloc/tody/internal/service"
 )
 
 type createTaskRequest struct {

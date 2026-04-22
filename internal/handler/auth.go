@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mmryalloc/todo-app/internal/auth"
-	"github.com/mmryalloc/todo-app/internal/entity"
-	"github.com/mmryalloc/todo-app/internal/service"
+	"github.com/mmryalloc/tody/internal/auth"
+	"github.com/mmryalloc/tody/internal/entity"
+	"github.com/mmryalloc/tody/internal/service"
 )
 
 type registerRequest struct {
@@ -23,13 +23,33 @@ type loginRequest struct {
 	Password string `json:"password" validate:"required,min=1,max=72"`
 }
 
+type updateMeRequest struct {
+	Email string `json:"email" validate:"required,email,max=255"`
+	Name  string `json:"name" validate:"required,notblank,max=255"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required,min=1,max=72"`
+	NewPassword     string `json:"new_password" validate:"required,min=8,max=72"`
+}
+
 type registerResponse struct {
 	ID    int64  `json:"id"`
 	Email string `json:"email"`
 }
 
+type userResponse struct {
+	ID    int64  `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
 type AuthService interface {
 	Register(ctx context.Context, email, password string) (entity.User, error)
+	GetMe(ctx context.Context, userID int64) (entity.User, error)
+	UpdateMe(ctx context.Context, userID int64, in service.UpdateUserInput) (entity.User, error)
+	ChangePassword(ctx context.Context, userID int64, currentPassword, newPassword, currentRefreshToken string) error
+	DeleteMe(ctx context.Context, userID int64) error
 	Login(ctx context.Context, email, password string, sc service.SessionContext) (service.TokenPair, error)
 	Refresh(ctx context.Context, refreshToken string, sc service.SessionContext) (service.TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
@@ -99,6 +119,102 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ok(w, struct{}{})
 }
 
+func (h *AuthHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	u, err := h.svc.GetMe(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, entity.ErrUserNotFound) {
+			notFound(w, "user not found")
+			return
+		}
+		slog.Error("handler auth get me", "error", err)
+		internalError(w, "failed to get user")
+		return
+	}
+
+	writeUser(w, u)
+}
+
+func (h *AuthHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	var req updateMeRequest
+	if !bind(w, r, &req) {
+		return
+	}
+
+	u, err := h.svc.UpdateMe(r.Context(), userID, service.UpdateUserInput{
+		Email: req.Email,
+		Name:  req.Name,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrEmailTaken) {
+			conflict(w, "email already registered")
+			return
+		}
+		if errors.Is(err, entity.ErrUserNotFound) {
+			notFound(w, "user not found")
+			return
+		}
+		slog.Error("handler auth update me", "error", err)
+		internalError(w, "failed to update user")
+		return
+	}
+
+	writeUser(w, u)
+}
+
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	refreshCookie, err := r.Cookie(cookieRefreshToken)
+	if err != nil || refreshCookie.Value == "" {
+		unauthorized(w, "refresh token missing")
+		return
+	}
+
+	var req changePasswordRequest
+	if !bind(w, r, &req) {
+		return
+	}
+
+	err = h.svc.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword, refreshCookie.Value)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			unauthorized(w, "invalid current password")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidSession) {
+			h.cookies.clearAccess(w)
+			h.cookies.clearRefresh(w)
+			unauthorized(w, "invalid or expired session")
+			return
+		}
+		if errors.Is(err, entity.ErrUserNotFound) {
+			notFound(w, "user not found")
+			return
+		}
+		slog.Error("handler auth change password", "error", err)
+		internalError(w, "failed to change password")
+		return
+	}
+
+	ok(w, struct{}{})
+}
+
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	refreshCookie, err := r.Cookie(cookieRefreshToken)
 	if err != nil || refreshCookie.Value == "" {
@@ -158,11 +274,41 @@ func (h *AuthHandler) LogoutAll(w http.ResponseWriter, r *http.Request) {
 	ok(w, struct{}{})
 }
 
+func (h *AuthHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	if err := h.svc.DeleteMe(r.Context(), userID); err != nil {
+		if errors.Is(err, entity.ErrUserNotFound) {
+			notFound(w, "user not found")
+			return
+		}
+		slog.Error("handler auth delete me", "error", err)
+		internalError(w, "failed to delete user")
+		return
+	}
+
+	h.cookies.clearAccess(w)
+	h.cookies.clearRefresh(w)
+	ok(w, struct{}{})
+}
+
 func sessionContextFromRequest(r *http.Request) service.SessionContext {
 	return service.SessionContext{
 		UserAgent: r.UserAgent(),
 		IPAddress: clientIP(r),
 	}
+}
+
+func writeUser(w http.ResponseWriter, u entity.User) {
+	ok(w, userResponse{
+		ID:    u.ID,
+		Email: u.Email,
+		Name:  u.Name,
+	})
 }
 
 func clientIP(r *http.Request) string {

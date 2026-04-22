@@ -1,4 +1,4 @@
-module github.com/mmryalloc/todo-app
+module github.com/mmryalloc/tody
 
 go 1.25.5
 

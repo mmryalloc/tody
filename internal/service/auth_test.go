@@ -6,16 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mmryalloc/todo-app/internal/auth"
-	"github.com/mmryalloc/todo-app/internal/entity"
+	"github.com/mmryalloc/tody/internal/auth"
+	"github.com/mmryalloc/tody/internal/entity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type mockUserRepository struct {
-	CreateFunc     func(ctx context.Context, u *entity.User) error
-	GetByEmailFunc func(ctx context.Context, email string) (entity.User, error)
-	GetByIDFunc    func(ctx context.Context, id int64) (entity.User, error)
+	CreateFunc             func(ctx context.Context, u *entity.User) error
+	GetByEmailFunc         func(ctx context.Context, email string) (entity.User, error)
+	GetByIDFunc            func(ctx context.Context, id int64) (entity.User, error)
+	UpdateProfileFunc      func(ctx context.Context, u *entity.User) error
+	UpdatePasswordHashFunc func(ctx context.Context, id int64, hash string) error
+	SoftDeleteFunc         func(ctx context.Context, id int64) error
 }
 
 func (m *mockUserRepository) Create(ctx context.Context, u *entity.User) error {
@@ -27,13 +30,23 @@ func (m *mockUserRepository) GetByEmail(ctx context.Context, email string) (enti
 func (m *mockUserRepository) GetByID(ctx context.Context, id int64) (entity.User, error) {
 	return m.GetByIDFunc(ctx, id)
 }
+func (m *mockUserRepository) UpdateProfile(ctx context.Context, u *entity.User) error {
+	return m.UpdateProfileFunc(ctx, u)
+}
+func (m *mockUserRepository) UpdatePasswordHash(ctx context.Context, id int64, hash string) error {
+	return m.UpdatePasswordHashFunc(ctx, id, hash)
+}
+func (m *mockUserRepository) SoftDelete(ctx context.Context, id int64) error {
+	return m.SoftDeleteFunc(ctx, id)
+}
 
 type mockSessionRepository struct {
-	SaveFunc             func(ctx context.Context, userID int64, hash string, s entity.Session, ttl time.Duration) error
-	ExistsFunc           func(ctx context.Context, userID int64, hash string) (bool, error)
-	LookupUserIDFunc     func(ctx context.Context, hash string) (int64, error)
-	DeleteFunc           func(ctx context.Context, userID int64, hash string) error
-	DeleteAllForUserFunc func(ctx context.Context, userID int64) error
+	SaveFunc                   func(ctx context.Context, userID int64, hash string, s entity.Session, ttl time.Duration) error
+	ExistsFunc                 func(ctx context.Context, userID int64, hash string) (bool, error)
+	LookupUserIDFunc           func(ctx context.Context, hash string) (int64, error)
+	DeleteFunc                 func(ctx context.Context, userID int64, hash string) error
+	DeleteAllForUserFunc       func(ctx context.Context, userID int64) error
+	DeleteAllForUserExceptFunc func(ctx context.Context, userID int64, keepHash string) error
 }
 
 func (m *mockSessionRepository) Save(ctx context.Context, userID int64, hash string, s entity.Session, ttl time.Duration) error {
@@ -50,6 +63,9 @@ func (m *mockSessionRepository) Delete(ctx context.Context, userID int64, hash s
 }
 func (m *mockSessionRepository) DeleteAllForUser(ctx context.Context, userID int64) error {
 	return m.DeleteAllForUserFunc(ctx, userID)
+}
+func (m *mockSessionRepository) DeleteAllForUserExcept(ctx context.Context, userID int64, keepHash string) error {
+	return m.DeleteAllForUserExceptFunc(ctx, userID, keepHash)
 }
 
 type stubTokenIssuer struct {
@@ -223,6 +239,178 @@ func TestLogin(t *testing.T) {
 	}
 }
 
+func TestGetMe(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				assert.Equal(t, int64(7), id)
+				return entity.User{ID: 7, Email: "user@example.com", Name: "User"}, nil
+			},
+		}
+		s := NewAuthService(users, &mockSessionRepository{}, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		u, err := s.GetMe(context.Background(), 7)
+		require.NoError(t, err)
+		assert.Equal(t, "User", u.Name)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{}, entity.ErrUserNotFound
+			},
+		}
+		s := NewAuthService(users, &mockSessionRepository{}, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		_, err := s.GetMe(context.Background(), 7)
+		require.ErrorIs(t, err, entity.ErrUserNotFound)
+	})
+}
+
+func TestUpdateMe(t *testing.T) {
+	t.Run("success normalises email and trims name", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{ID: id, Email: "old@example.com", Name: "Old"}, nil
+			},
+			UpdateProfileFunc: func(ctx context.Context, u *entity.User) error {
+				assert.Equal(t, int64(7), u.ID)
+				assert.Equal(t, "new@example.com", u.Email)
+				assert.Equal(t, "New Name", u.Name)
+				return nil
+			},
+		}
+		s := NewAuthService(users, &mockSessionRepository{}, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		u, err := s.UpdateMe(context.Background(), 7, UpdateUserInput{
+			Email: "  New@Example.COM  ",
+			Name:  "  New Name  ",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "new@example.com", u.Email)
+		assert.Equal(t, "New Name", u.Name)
+	})
+
+	t.Run("duplicate email", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{ID: id}, nil
+			},
+			UpdateProfileFunc: func(ctx context.Context, u *entity.User) error {
+				return entity.ErrUserExists
+			},
+		}
+		s := NewAuthService(users, &mockSessionRepository{}, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		_, err := s.UpdateMe(context.Background(), 7, UpdateUserInput{Email: "taken@example.com", Name: "User"})
+		require.ErrorIs(t, err, ErrEmailTaken)
+	})
+}
+
+func TestChangePassword(t *testing.T) {
+	const oldPassword = "old-password"
+	hash, err := auth.HashPassword(oldPassword)
+	require.NoError(t, err)
+
+	t.Run("success updates password and revokes other sessions", func(t *testing.T) {
+		updated := false
+		revoked := false
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{ID: id, PasswordHash: hash}, nil
+			},
+			UpdatePasswordHashFunc: func(ctx context.Context, id int64, newHash string) error {
+				updated = true
+				assert.Equal(t, int64(7), id)
+				assert.NoError(t, auth.VerifyPassword(newHash, "new-password"))
+				return nil
+			},
+		}
+		sessions := &mockSessionRepository{
+			ExistsFunc: func(ctx context.Context, userID int64, hash string) (bool, error) {
+				assert.Equal(t, int64(7), userID)
+				assert.Equal(t, auth.HashRefreshToken("current-refresh"), hash)
+				return true, nil
+			},
+			DeleteAllForUserExceptFunc: func(ctx context.Context, userID int64, keepHash string) error {
+				revoked = true
+				assert.Equal(t, int64(7), userID)
+				assert.Equal(t, auth.HashRefreshToken("current-refresh"), keepHash)
+				return nil
+			},
+		}
+		s := NewAuthService(users, sessions, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		err := s.ChangePassword(context.Background(), 7, oldPassword, "new-password", "current-refresh")
+		require.NoError(t, err)
+		assert.True(t, updated)
+		assert.True(t, revoked)
+	})
+
+	t.Run("invalid current session", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{ID: id, PasswordHash: hash}, nil
+			},
+			UpdatePasswordHashFunc: func(ctx context.Context, id int64, newHash string) error {
+				t.Fatal("password must not be updated")
+				return nil
+			},
+		}
+		sessions := &mockSessionRepository{
+			ExistsFunc: func(ctx context.Context, userID int64, hash string) (bool, error) {
+				return false, nil
+			},
+		}
+		s := NewAuthService(users, sessions, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		err := s.ChangePassword(context.Background(), 7, oldPassword, "new-password", "stale-refresh")
+		require.ErrorIs(t, err, ErrInvalidSession)
+	})
+
+	t.Run("wrong current password", func(t *testing.T) {
+		users := &mockUserRepository{
+			GetByIDFunc: func(ctx context.Context, id int64) (entity.User, error) {
+				return entity.User{ID: id, PasswordHash: hash}, nil
+			},
+			UpdatePasswordHashFunc: func(ctx context.Context, id int64, newHash string) error {
+				t.Fatal("password must not be updated")
+				return nil
+			},
+		}
+		s := NewAuthService(users, &mockSessionRepository{}, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		err := s.ChangePassword(context.Background(), 7, "wrong", "new-password", "current-refresh")
+		require.ErrorIs(t, err, ErrInvalidCredentials)
+	})
+}
+
+func TestDeleteMe(t *testing.T) {
+	t.Run("soft deletes user and revokes sessions", func(t *testing.T) {
+		deleted := false
+		revoked := false
+		users := &mockUserRepository{
+			SoftDeleteFunc: func(ctx context.Context, id int64) error {
+				deleted = true
+				assert.Equal(t, int64(7), id)
+				return nil
+			},
+		}
+		sessions := &mockSessionRepository{
+			DeleteAllForUserFunc: func(ctx context.Context, userID int64) error {
+				revoked = true
+				assert.Equal(t, int64(7), userID)
+				return nil
+			},
+		}
+		s := NewAuthService(users, sessions, &stubTokenIssuer{token: "x"}, testRefreshTTL)
+
+		require.NoError(t, s.DeleteMe(context.Background(), 7))
+		assert.True(t, deleted)
+		assert.True(t, revoked)
+	})
+}
+
 func TestRefresh(t *testing.T) {
 	t.Run("success rotates token", func(t *testing.T) {
 		var savedHash string
@@ -330,7 +518,7 @@ func TestLogoutAll(t *testing.T) {
 }
 
 func TestJWTManagerRoundTrip(t *testing.T) {
-	m := auth.NewJWTManager("test-secret", time.Minute, "todo-app")
+	m := auth.NewJWTManager("test-secret", time.Minute, "tody")
 
 	tok, exp, err := m.Generate(123)
 	require.NoError(t, err)
@@ -343,7 +531,7 @@ func TestJWTManagerRoundTrip(t *testing.T) {
 }
 
 func TestJWTManagerRejectsTamperedToken(t *testing.T) {
-	m := auth.NewJWTManager("test-secret", time.Minute, "todo-app")
+	m := auth.NewJWTManager("test-secret", time.Minute, "tody")
 	tok, _, err := m.Generate(1)
 	require.NoError(t, err)
 
@@ -357,7 +545,7 @@ func TestJWTManagerRejectsTamperedToken(t *testing.T) {
 }
 
 func TestJWTManagerRejectsExpired(t *testing.T) {
-	m := auth.NewJWTManager("test-secret", -time.Minute, "todo-app")
+	m := auth.NewJWTManager("test-secret", -time.Minute, "tody")
 	tok, _, err := m.Generate(1)
 	require.NoError(t, err)
 
@@ -370,7 +558,7 @@ func TestJWTManagerRejectsWrongIssuer(t *testing.T) {
 	tok, _, err := signer.Generate(1)
 	require.NoError(t, err)
 
-	verifier := auth.NewJWTManager("test-secret", time.Minute, "todo-app")
+	verifier := auth.NewJWTManager("test-secret", time.Minute, "tody")
 	_, err = verifier.Parse(tok)
 	require.ErrorIs(t, err, auth.ErrInvalidToken)
 }

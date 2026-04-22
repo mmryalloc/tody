@@ -12,11 +12,11 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/mmryalloc/todo-app/internal/auth"
-	"github.com/mmryalloc/todo-app/internal/config"
-	"github.com/mmryalloc/todo-app/internal/handler"
-	"github.com/mmryalloc/todo-app/internal/repository"
-	"github.com/mmryalloc/todo-app/internal/service"
+	"github.com/mmryalloc/tody/internal/auth"
+	"github.com/mmryalloc/tody/internal/config"
+	"github.com/mmryalloc/tody/internal/handler"
+	"github.com/mmryalloc/tody/internal/repository"
+	"github.com/mmryalloc/tody/internal/service"
 	"github.com/redis/go-redis/v9"
 )
 

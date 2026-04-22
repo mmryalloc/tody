@@ -84,7 +84,7 @@ func Load() (*Config, error) {
 			Port:            getEnv("DB_PORT", "5432"),
 			User:            getEnv("DB_USER", "postgres"),
 			Password:        getEnv("DB_PASSWORD", "postgres"),
-			Name:            getEnv("DB_NAME", "todo_db"),
+			Name:            getEnv("DB_NAME", "tody_db"),
 			SSLMode:         getEnv("DB_SSL_MODE", "disable"),
 			MaxOpenConns:    getEnvInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    getEnvInt("DB_MAX_IDLE_CONNS", 10),
@@ -100,7 +100,7 @@ func Load() (*Config, error) {
 			AccessSecret:    getEnv("JWT_ACCESS_SECRET", "change-me-access-secret"),
 			AccessTokenTTL:  getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL: getEnvDuration("JWT_REFRESH_TTL", 30*24*time.Hour),
-			Issuer:          getEnv("JWT_ISSUER", "todo-app"),
+			Issuer:          getEnv("JWT_ISSUER", "tody"),
 		},
 		Cookie: CookieConfig{
 			Domain: getEnv("COOKIE_DOMAIN", ""),

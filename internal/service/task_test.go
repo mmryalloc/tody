@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mmryalloc/todo-app/internal/entity"
+	"github.com/mmryalloc/tody/internal/entity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mmryalloc/todo-app/internal/entity"
+	"github.com/mmryalloc/tody/internal/entity"
 )
 
 type taskRepository struct {

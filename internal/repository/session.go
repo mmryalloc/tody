@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mmryalloc/todo-app/internal/entity"
+	"github.com/mmryalloc/tody/internal/entity"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -95,6 +95,14 @@ func (r *sessionRepository) Delete(ctx context.Context, userID int64, tokenHash 
 }
 
 func (r *sessionRepository) DeleteAllForUser(ctx context.Context, userID int64) error {
+	return r.deleteAllForUser(ctx, userID, "")
+}
+
+func (r *sessionRepository) DeleteAllForUserExcept(ctx context.Context, userID int64, keepTokenHash string) error {
+	return r.deleteAllForUser(ctx, userID, keepTokenHash)
+}
+
+func (r *sessionRepository) deleteAllForUser(ctx context.Context, userID int64, keepTokenHash string) error {
 	pattern := userSessionsPattern(userID)
 	iter := r.client.Scan(ctx, 0, pattern, sessionScanCount).Iterator()
 
@@ -114,8 +122,12 @@ func (r *sessionRepository) DeleteAllForUser(ctx context.Context, userID int64) 
 
 	for iter.Next(ctx) {
 		key := iter.Val()
+		hash, ok := strings.CutPrefix(key, prefix)
+		if ok && hash == keepTokenHash {
+			continue
+		}
 		batch = append(batch, key)
-		if hash, ok := strings.CutPrefix(key, prefix); ok {
+		if ok {
 			batch = append(batch, lookupKey(hash))
 		}
 		if len(batch) >= sessionScanCount*2 {

@@ -5,14 +5,14 @@ import (
 	"net/http"
 	"runtime/debug"
 
-	"github.com/mmryalloc/todo-app/internal/auth"
+	"github.com/mmryalloc/tody/internal/auth"
 )
 
 type TokenParser interface {
 	Parse(token string) (int64, error)
 }
 
-func RequireAuth(parser TokenParser) func(http.Handler) http.Handler {
+func requireAuth(parser TokenParser) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(cookieAccessToken)
@@ -33,7 +33,7 @@ func RequireAuth(parser TokenParser) func(http.Handler) http.Handler {
 	}
 }
 
-func Recover(next http.Handler) http.Handler {
+func recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			rec := recover()
