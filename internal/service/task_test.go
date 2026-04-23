@@ -43,6 +43,7 @@ func (m *mockTaskRepository) Delete(ctx context.Context, userID, id int64) error
 type mockTaskProjectRepository struct {
 	GetDefaultFunc func(ctx context.Context, userID int64) (entity.Project, error)
 	ExistsFunc     func(ctx context.Context, userID, id int64) (bool, error)
+	GetRoleFunc    func(ctx context.Context, projectID, userID int64) (entity.ProjectRole, error)
 }
 
 func (m *mockTaskProjectRepository) GetDefault(ctx context.Context, userID int64) (entity.Project, error) {
@@ -53,6 +54,10 @@ func (m *mockTaskProjectRepository) Exists(ctx context.Context, userID, id int64
 	return m.ExistsFunc(ctx, userID, id)
 }
 
+func (m *mockTaskProjectRepository) GetRole(ctx context.Context, projectID, userID int64) (entity.ProjectRole, error) {
+	return m.GetRoleFunc(ctx, projectID, userID)
+}
+
 func defaultProjectMock(projectID int64) TaskProjectRepository {
 	return &mockTaskProjectRepository{
 		GetDefaultFunc: func(ctx context.Context, userID int64) (entity.Project, error) {
@@ -60,6 +65,12 @@ func defaultProjectMock(projectID int64) TaskProjectRepository {
 		},
 		ExistsFunc: func(ctx context.Context, userID, id int64) (bool, error) {
 			return id == projectID, nil
+		},
+		GetRoleFunc: func(ctx context.Context, id, userID int64) (entity.ProjectRole, error) {
+			if id != projectID {
+				return "", entity.ErrProjectNotFound
+			}
+			return entity.ProjectRoleOwner, nil
 		},
 	}
 }
@@ -391,6 +402,9 @@ func TestDeleteTask(t *testing.T) {
 			id:   1,
 			mock: func(t *testing.T) TaskRepository {
 				return &mockTaskRepository{
+					GetByIDFunc: func(ctx context.Context, userID, id int64) (entity.Task, error) {
+						return entity.Task{ID: id, UserID: userID, ProjectID: 100}, nil
+					},
 					DeleteFunc: func(ctx context.Context, userID, id int64) error {
 						assert.Equal(t, testUserID, userID)
 						assert.Equal(t, int64(1), id)
@@ -404,6 +418,9 @@ func TestDeleteTask(t *testing.T) {
 			id:   1,
 			mock: func(t *testing.T) TaskRepository {
 				return &mockTaskRepository{
+					GetByIDFunc: func(ctx context.Context, userID, id int64) (entity.Task, error) {
+						return entity.Task{ID: id, UserID: userID, ProjectID: 100}, nil
+					},
 					DeleteFunc: func(ctx context.Context, userID, id int64) error {
 						return errors.New("delete error")
 					},

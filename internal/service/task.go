@@ -30,6 +30,7 @@ type TaskRepository interface {
 type TaskProjectRepository interface {
 	GetDefault(ctx context.Context, userID int64) (entity.Project, error)
 	Exists(ctx context.Context, userID, id int64) (bool, error)
+	GetRole(ctx context.Context, projectID, userID int64) (entity.ProjectRole, error)
 }
 
 type taskService struct {
@@ -47,6 +48,9 @@ func NewTaskService(repo TaskRepository, projects TaskProjectRepository) *taskSe
 func (s *taskService) CreateTask(ctx context.Context, userID int64, t CreateTaskInput) (entity.Task, error) {
 	projectID, err := s.resolveProjectID(ctx, userID, t.ProjectID)
 	if err != nil {
+		return entity.Task{}, err
+	}
+	if err := s.ensureProjectWrite(ctx, userID, projectID); err != nil {
 		return entity.Task{}, err
 	}
 
@@ -92,9 +96,12 @@ func (s *taskService) UpdateTask(ctx context.Context, userID, id int64, in Updat
 	if err != nil {
 		return entity.Task{}, err
 	}
+	if err := s.ensureProjectWrite(ctx, userID, task.ProjectID); err != nil {
+		return entity.Task{}, err
+	}
 
 	if in.ProjectID != nil {
-		if err := s.ensureProject(ctx, userID, *in.ProjectID); err != nil {
+		if err := s.ensureProjectWrite(ctx, userID, *in.ProjectID); err != nil {
 			return entity.Task{}, err
 		}
 		task.ProjectID = *in.ProjectID
@@ -117,6 +124,13 @@ func (s *taskService) UpdateTask(ctx context.Context, userID, id int64, in Updat
 }
 
 func (s *taskService) DeleteTask(ctx context.Context, userID, id int64) error {
+	task, err := s.repo.GetByID(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureProjectWrite(ctx, userID, task.ProjectID); err != nil {
+		return err
+	}
 	return s.repo.Delete(ctx, userID, id)
 }
 
@@ -142,6 +156,17 @@ func (s *taskService) ensureProject(ctx context.Context, userID, projectID int64
 	}
 	if !exists {
 		return entity.ErrProjectNotFound
+	}
+	return nil
+}
+
+func (s *taskService) ensureProjectWrite(ctx context.Context, userID, projectID int64) error {
+	role, err := s.projects.GetRole(ctx, projectID, userID)
+	if err != nil {
+		return err
+	}
+	if role != entity.ProjectRoleOwner && role != entity.ProjectRoleEditor {
+		return ErrForbidden
 	}
 	return nil
 }

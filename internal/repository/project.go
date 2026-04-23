@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mmryalloc/tody/internal/entity"
 )
@@ -21,26 +22,51 @@ func NewProjectRepository(db *sql.DB) *projectRepository {
 }
 
 func (r *projectRepository) Create(ctx context.Context, p *entity.Project) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("repository project create begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
 	query := `
 		INSERT INTO projects (user_id, name, color, is_default)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at, updated_at
 	`
-	err := r.db.QueryRowContext(ctx, query, p.UserID, p.Name, p.Color, p.IsDefault).
+	err = tx.QueryRowContext(ctx, query, p.UserID, p.Name, p.Color, p.IsDefault).
 		Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("repository project create: %w", err)
 	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)`,
+		p.ID, p.UserID, entity.ProjectRoleOwner,
+	); err != nil {
+		return fmt.Errorf("repository project create owner member: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("repository project create commit: %w", err)
+	}
+	committed = true
+
 	return nil
 }
 
 func (r *projectRepository) List(ctx context.Context, userID int64, limit, offset int) ([]entity.Project, int, error) {
 	query := `
-		SELECT id, user_id, name, color, is_default, created_at, updated_at,
+		SELECT p.id, p.user_id, p.name, p.color, p.is_default, p.created_at, p.updated_at,
 		       COUNT(*) OVER () AS total
-		FROM projects
-		WHERE user_id = $1
-		ORDER BY is_default DESC, created_at DESC
+		FROM projects p
+		INNER JOIN project_members pm ON pm.project_id = p.id
+		WHERE pm.user_id = $1
+		ORDER BY p.is_default DESC, p.created_at DESC
 		LIMIT $2 OFFSET $3
 	`
 	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
@@ -69,7 +95,7 @@ func (r *projectRepository) List(ctx context.Context, userID int64, limit, offse
 
 	if len(projects) == 0 {
 		if err := r.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM projects WHERE user_id = $1`, userID,
+			`SELECT COUNT(*) FROM project_members WHERE user_id = $1`, userID,
 		).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("repository project list count: %w", err)
 		}
@@ -80,9 +106,10 @@ func (r *projectRepository) List(ctx context.Context, userID int64, limit, offse
 
 func (r *projectRepository) GetByID(ctx context.Context, userID, id int64) (entity.Project, error) {
 	query := `
-		SELECT id, user_id, name, color, is_default, created_at, updated_at
-		FROM projects
-		WHERE id = $1 AND user_id = $2
+		SELECT p.id, p.user_id, p.name, p.color, p.is_default, p.created_at, p.updated_at
+		FROM projects p
+		INNER JOIN project_members pm ON pm.project_id = p.id
+		WHERE p.id = $1 AND pm.user_id = $2
 	`
 	var p entity.Project
 	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
@@ -104,8 +131,9 @@ func (r *projectRepository) GetDetails(ctx context.Context, userID, id int64) (e
 		       COUNT(t.id) FILTER (WHERE t.completed) AS completed_tasks,
 		       COUNT(t.id) FILTER (WHERE NOT t.completed) AS active_tasks
 		FROM projects p
+		INNER JOIN project_members pm ON pm.project_id = p.id
 		LEFT JOIN tasks t ON t.project_id = p.id
-		WHERE p.id = $1 AND p.user_id = $2
+		WHERE p.id = $1 AND pm.user_id = $2
 		GROUP BY p.id
 	`
 	var d entity.ProjectDetails
@@ -144,7 +172,11 @@ func (r *projectRepository) GetDefault(ctx context.Context, userID int64) (entit
 func (r *projectRepository) Exists(ctx context.Context, userID, id int64) (bool, error) {
 	var exists bool
 	err := r.db.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND user_id = $2)`,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM project_members
+			WHERE project_id = $1 AND user_id = $2
+		)`,
 		id, userID,
 	).Scan(&exists)
 	if err != nil {
@@ -157,10 +189,10 @@ func (r *projectRepository) Update(ctx context.Context, p *entity.Project) error
 	query := `
 		UPDATE projects
 		SET name = $1, color = $2, updated_at = NOW()
-		WHERE id = $3 AND user_id = $4
+		WHERE id = $3
 		RETURNING updated_at
 	`
-	err := r.db.QueryRowContext(ctx, query, p.Name, p.Color, p.ID, p.UserID).Scan(&p.UpdatedAt)
+	err := r.db.QueryRowContext(ctx, query, p.Name, p.Color, p.ID).Scan(&p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return entity.ErrProjectNotFound
@@ -172,8 +204,8 @@ func (r *projectRepository) Update(ctx context.Context, p *entity.Project) error
 
 func (r *projectRepository) Delete(ctx context.Context, userID, id int64) error {
 	res, err := r.db.ExecContext(ctx,
-		`DELETE FROM projects WHERE id = $1 AND user_id = $2`,
-		id, userID,
+		`DELETE FROM projects WHERE id = $1`,
+		id,
 	)
 	if err != nil {
 		return fmt.Errorf("repository project delete: %w", err)
@@ -186,4 +218,143 @@ func (r *projectRepository) Delete(ctx context.Context, userID, id int64) error 
 		return entity.ErrProjectNotFound
 	}
 	return nil
+}
+
+func (r *projectRepository) GetRole(ctx context.Context, projectID, userID int64) (entity.ProjectRole, error) {
+	var role entity.ProjectRole
+	err := r.db.QueryRowContext(ctx,
+		`SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2`,
+		projectID, userID,
+	).Scan(&role)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", entity.ErrProjectNotFound
+		}
+		return "", fmt.Errorf("repository project get role: %w", err)
+	}
+	return role, nil
+}
+
+func (r *projectRepository) AddMemberByEmail(ctx context.Context, projectID int64, email string, role entity.ProjectRole) (entity.ProjectMember, error) {
+	query := `
+		INSERT INTO project_members (project_id, user_id, role)
+		SELECT $1, u.id, $3
+		FROM users u
+		WHERE u.email = $2 AND u.deleted_at IS NULL
+		RETURNING project_id, user_id, role, created_at, updated_at
+	`
+	var m entity.ProjectMember
+	err := r.db.QueryRowContext(ctx, query, projectID, strings.ToLower(email), role).Scan(
+		&m.ProjectID, &m.UserID, &m.Role, &m.CreatedAt, &m.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return entity.ProjectMember{}, entity.ErrUserNotFound
+		}
+		if isUniqueViolation(err) {
+			return entity.ProjectMember{}, entity.ErrProjectMemberExists
+		}
+		if isForeignKeyViolation(err) {
+			return entity.ProjectMember{}, entity.ErrProjectNotFound
+		}
+		return entity.ProjectMember{}, fmt.Errorf("repository project add member by email: %w", err)
+	}
+	return r.GetMember(ctx, projectID, m.UserID)
+}
+
+func (r *projectRepository) ListMembers(ctx context.Context, projectID int64) ([]entity.ProjectMember, error) {
+	query := `
+		SELECT pm.project_id, pm.user_id, u.email, u.name, pm.role, pm.created_at, pm.updated_at
+		FROM project_members pm
+		INNER JOIN users u ON u.id = pm.user_id
+		WHERE pm.project_id = $1 AND u.deleted_at IS NULL
+		ORDER BY
+			CASE pm.role WHEN 'owner' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END,
+			u.email ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("repository project list members: %w", err)
+	}
+	defer rows.Close()
+
+	members := []entity.ProjectMember{}
+	for rows.Next() {
+		var m entity.ProjectMember
+		if err := rows.Scan(&m.ProjectID, &m.UserID, &m.Email, &m.Name, &m.Role, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("repository project list members scan: %w", err)
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repository project list members iteration: %w", err)
+	}
+	return members, nil
+}
+
+func (r *projectRepository) GetMember(ctx context.Context, projectID, userID int64) (entity.ProjectMember, error) {
+	query := `
+		SELECT pm.project_id, pm.user_id, u.email, u.name, pm.role, pm.created_at, pm.updated_at
+		FROM project_members pm
+		INNER JOIN users u ON u.id = pm.user_id
+		WHERE pm.project_id = $1 AND pm.user_id = $2 AND u.deleted_at IS NULL
+	`
+	var m entity.ProjectMember
+	err := r.db.QueryRowContext(ctx, query, projectID, userID).Scan(
+		&m.ProjectID, &m.UserID, &m.Email, &m.Name, &m.Role, &m.CreatedAt, &m.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return entity.ProjectMember{}, entity.ErrProjectMemberNotFound
+		}
+		return entity.ProjectMember{}, fmt.Errorf("repository project get member: %w", err)
+	}
+	return m, nil
+}
+
+func (r *projectRepository) UpdateMemberRole(ctx context.Context, projectID, userID int64, role entity.ProjectRole) (entity.ProjectMember, error) {
+	query := `
+		UPDATE project_members
+		SET role = $1, updated_at = NOW()
+		WHERE project_id = $2 AND user_id = $3
+		RETURNING updated_at
+	`
+	var updatedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, query, role, projectID, userID).Scan(&updatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return entity.ProjectMember{}, entity.ErrProjectMemberNotFound
+		}
+		return entity.ProjectMember{}, fmt.Errorf("repository project update member role: %w", err)
+	}
+	return r.GetMember(ctx, projectID, userID)
+}
+
+func (r *projectRepository) DeleteMember(ctx context.Context, projectID, userID int64) error {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`,
+		projectID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("repository project delete member: %w", err)
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("repository project delete member rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return entity.ErrProjectMemberNotFound
+	}
+	return nil
+}
+
+func (r *projectRepository) CountOwners(ctx context.Context, projectID int64) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM project_members WHERE project_id = $1 AND role = 'owner'`,
+		projectID,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("repository project count owners: %w", err)
+	}
+	return count, nil
 }

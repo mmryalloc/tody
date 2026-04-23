@@ -50,11 +50,19 @@ func (r *userRepository) Create(ctx context.Context, u *entity.User) error {
 		return fmt.Errorf("repository user create: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO projects (user_id, name, color, is_default) VALUES ($1, $2, $3, TRUE)`,
+	var projectID int64
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO projects (user_id, name, color, is_default) VALUES ($1, $2, $3, TRUE) RETURNING id`,
 		u.ID, defaultUserProjectName, defaultUserProjectColor,
-	); err != nil {
+	).Scan(&projectID); err != nil {
 		return fmt.Errorf("repository user create default project: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		projectID, u.ID,
+	); err != nil {
+		return fmt.Errorf("repository user create default project member: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

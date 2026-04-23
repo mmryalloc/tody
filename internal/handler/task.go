@@ -73,6 +73,10 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 			notFound(w, "project not found")
 			return
 		}
+		if errors.Is(err, service.ErrForbidden) {
+			forbidden(w, "insufficient project permissions")
+			return
+		}
 		slog.Error("handler task create", "error", err)
 		internalError(w, "failed to create task")
 		return
@@ -188,6 +192,10 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 			notFound(w, "task not found")
 			return
 		}
+		if errors.Is(err, service.ErrForbidden) {
+			forbidden(w, "insufficient project permissions")
+			return
+		}
 		slog.Error("handler update task", "error", err)
 		internalError(w, "failed to update task")
 		return
@@ -211,6 +219,10 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.DeleteTask(r.Context(), userID, id); err != nil {
 		if errors.Is(err, entity.ErrTaskNotFound) {
 			notFound(w, "task not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			forbidden(w, "insufficient project permissions")
 			return
 		}
 		slog.Error("handler delete task", "error", err)

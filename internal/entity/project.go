@@ -6,6 +6,16 @@ import (
 )
 
 var ErrProjectNotFound = errors.New("project not found")
+var ErrProjectMemberNotFound = errors.New("project member not found")
+var ErrProjectMemberExists = errors.New("project member already exists")
+
+type ProjectRole string
+
+const (
+	ProjectRoleOwner  ProjectRole = "owner"
+	ProjectRoleEditor ProjectRole = "editor"
+	ProjectRoleViewer ProjectRole = "viewer"
+)
 
 type Project struct {
 	ID        int64
@@ -26,4 +36,14 @@ type ProjectStats struct {
 type ProjectDetails struct {
 	Project
 	Stats ProjectStats
+}
+
+type ProjectMember struct {
+	ProjectID int64
+	UserID    int64
+	Email     string
+	Name      string
+	Role      ProjectRole
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

@@ -44,7 +44,12 @@ func (r *taskRepository) List(ctx context.Context, userID int64, projectID *int6
 		SELECT id, user_id, project_id, title, description, completed, created_at, updated_at,
 		       COUNT(*) OVER () AS total
 		FROM tasks
-		WHERE user_id = $1
+		WHERE EXISTS (
+			SELECT 1
+			FROM project_members pm
+			WHERE pm.project_id = tasks.project_id
+			  AND pm.user_id = $1
+		)
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
 	`
@@ -57,7 +62,13 @@ func (r *taskRepository) List(ctx context.Context, userID int64, projectID *int6
 			SELECT id, user_id, project_id, title, description, completed, created_at, updated_at,
 			       COUNT(*) OVER () AS total
 			FROM tasks
-			WHERE user_id = $1 AND project_id = $2
+			WHERE project_id = $2
+			  AND EXISTS (
+				SELECT 1
+				FROM project_members pm
+				WHERE pm.project_id = tasks.project_id
+				  AND pm.user_id = $1
+			  )
 			ORDER BY created_at DESC
 			LIMIT $3 OFFSET $4
 		`
@@ -89,10 +100,29 @@ func (r *taskRepository) List(ctx context.Context, userID int64, projectID *int6
 	}
 
 	if len(tasks) == 0 {
-		countQuery := `SELECT COUNT(*) FROM tasks WHERE user_id = $1`
+		countQuery := `
+			SELECT COUNT(*)
+			FROM tasks
+			WHERE EXISTS (
+				SELECT 1
+				FROM project_members pm
+				WHERE pm.project_id = tasks.project_id
+				  AND pm.user_id = $1
+			)
+		`
 		var err error
 		if projectID != nil {
-			countQuery = `SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND project_id = $2`
+			countQuery = `
+				SELECT COUNT(*)
+				FROM tasks
+				WHERE project_id = $2
+				  AND EXISTS (
+					SELECT 1
+					FROM project_members pm
+					WHERE pm.project_id = tasks.project_id
+					  AND pm.user_id = $1
+				  )
+			`
 			err = r.db.QueryRowContext(ctx, countQuery, userID, *projectID).Scan(&total)
 		} else {
 			err = r.db.QueryRowContext(ctx, countQuery, userID).Scan(&total)
@@ -109,7 +139,13 @@ func (r *taskRepository) GetByID(ctx context.Context, userID, id int64) (entity.
 	query := `
 		SELECT id, user_id, project_id, title, description, completed, created_at, updated_at
 		FROM tasks
-		WHERE id = $1 AND user_id = $2
+		WHERE id = $1
+		  AND EXISTS (
+			SELECT 1
+			FROM project_members pm
+			WHERE pm.project_id = tasks.project_id
+			  AND pm.user_id = $2
+		  )
 	`
 	var t entity.Task
 	err := r.db.QueryRowContext(ctx, query, id, userID).Scan(
@@ -129,7 +165,13 @@ func (r *taskRepository) Update(ctx context.Context, t *entity.Task) error {
 	query := `
 		UPDATE tasks
 		SET project_id = $1, title = $2, description = $3, completed = $4, updated_at = NOW()
-		WHERE id = $5 AND user_id = $6
+		WHERE id = $5
+		  AND EXISTS (
+			SELECT 1
+			FROM project_members pm
+			WHERE pm.project_id = tasks.project_id
+			  AND pm.user_id = $6
+		  )
 		RETURNING updated_at
 	`
 	err := r.db.QueryRowContext(
@@ -154,7 +196,16 @@ func (r *taskRepository) Update(ctx context.Context, t *entity.Task) error {
 }
 
 func (r *taskRepository) Delete(ctx context.Context, userID, id int64) error {
-	query := `DELETE FROM tasks WHERE id = $1 AND user_id = $2`
+	query := `
+		DELETE FROM tasks
+		WHERE id = $1
+		  AND EXISTS (
+			SELECT 1
+			FROM project_members pm
+			WHERE pm.project_id = tasks.project_id
+			  AND pm.user_id = $2
+		  )
+	`
 	res, err := r.db.ExecContext(ctx, query, id, userID)
 	if err != nil {
 		return fmt.Errorf("repository task delete: %w", err)

@@ -10,6 +10,7 @@ const (
 	errorCodeInternalError = "internal_error"
 	errorCodeNotFound      = "not_found"
 	errorCodeUnauthorized  = "unauthorized"
+	errorCodeForbidden     = "forbidden"
 	errorCodeConflict      = "conflict"
 )
 
@@ -115,6 +116,16 @@ func unauthorized(w http.ResponseWriter, msg string) {
 		Success: false,
 		Error: &errorBody{
 			Code:    errorCodeUnauthorized,
+			Message: msg,
+		},
+	})
+}
+
+func forbidden(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusForbidden, envelope{
+		Success: false,
+		Error: &errorBody{
+			Code:    errorCodeForbidden,
 			Message: msg,
 		},
 	})

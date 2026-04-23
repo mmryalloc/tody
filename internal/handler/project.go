@@ -23,6 +23,15 @@ type updateProjectRequest struct {
 	Color string `json:"color" validate:"required,hexrgb"`
 }
 
+type inviteProjectMemberRequest struct {
+	Email string `json:"email" validate:"required,email,max=255"`
+	Role  string `json:"role" validate:"required,oneof=owner editor viewer"`
+}
+
+type updateProjectMemberRequest struct {
+	Role string `json:"role" validate:"required,oneof=owner editor viewer"`
+}
+
 type projectResponse struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
@@ -44,12 +53,25 @@ type projectDetailsResponse struct {
 	ActiveTasks    int    `json:"active_tasks"`
 }
 
+type projectMemberResponse struct {
+	UserID    int64  `json:"user_id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type ProjectService interface {
 	CreateProject(ctx context.Context, userID int64, in service.CreateProjectInput) (entity.Project, error)
 	ListProjects(ctx context.Context, userID int64, page, limit int) ([]entity.Project, int, error)
 	GetProject(ctx context.Context, userID, id int64) (entity.ProjectDetails, error)
 	UpdateProject(ctx context.Context, userID, id int64, in service.UpdateProjectInput) (entity.Project, error)
 	DeleteProject(ctx context.Context, userID, id int64) error
+	InviteMember(ctx context.Context, actorID, projectID int64, in service.InviteProjectMemberInput) (entity.ProjectMember, error)
+	ListMembers(ctx context.Context, actorID, projectID int64) ([]entity.ProjectMember, error)
+	UpdateMemberRole(ctx context.Context, actorID, projectID, memberID int64, in service.UpdateProjectMemberInput) (entity.ProjectMember, error)
+	RemoveMember(ctx context.Context, actorID, projectID, memberID int64) error
 }
 
 type ProjectHandler struct {
@@ -157,8 +179,7 @@ func (h *ProjectHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		Color: req.Color,
 	})
 	if err != nil {
-		if errors.Is(err, entity.ErrProjectNotFound) {
-			notFound(w, "project not found")
+		if handleProjectError(w, err) {
 			return
 		}
 		slog.Error("handler update project", "error", err)
@@ -183,16 +204,146 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 
 	err := h.svc.DeleteProject(r.Context(), userID, id)
 	if err != nil {
-		if errors.Is(err, service.ErrDefaultProjectDelete) {
-			conflict(w, "default project cannot be deleted")
-			return
-		}
-		if errors.Is(err, entity.ErrProjectNotFound) {
-			notFound(w, "project not found")
+		if handleProjectError(w, err) {
 			return
 		}
 		slog.Error("handler delete project", "error", err)
 		internalError(w, "failed to delete project")
+		return
+	}
+
+	ok(w, struct{}{})
+}
+
+func (h *ProjectHandler) InviteMember(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	projectID, valid := parseProjectID(w, r)
+	if !valid {
+		return
+	}
+
+	var req inviteProjectMemberRequest
+	if !bind(w, r, &req) {
+		return
+	}
+
+	member, err := h.svc.InviteMember(r.Context(), userID, projectID, service.InviteProjectMemberInput{
+		Email: req.Email,
+		Role:  entity.ProjectRole(req.Role),
+	})
+	if err != nil {
+		if handleProjectError(w, err) {
+			return
+		}
+		if errors.Is(err, entity.ErrUserNotFound) {
+			notFound(w, "user not found")
+			return
+		}
+		if errors.Is(err, entity.ErrProjectMemberExists) {
+			conflict(w, "project member already exists")
+			return
+		}
+		slog.Error("handler invite project member", "error", err)
+		internalError(w, "failed to invite project member")
+		return
+	}
+
+	created(w, projectMemberToResponse(member))
+}
+
+func (h *ProjectHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	projectID, valid := parseProjectID(w, r)
+	if !valid {
+		return
+	}
+
+	members, err := h.svc.ListMembers(r.Context(), userID, projectID)
+	if err != nil {
+		if handleProjectError(w, err) {
+			return
+		}
+		slog.Error("handler list project members", "error", err)
+		internalError(w, "failed to list project members")
+		return
+	}
+
+	res := make([]projectMemberResponse, len(members))
+	for i, m := range members {
+		res[i] = projectMemberToResponse(m)
+	}
+	ok(w, res)
+}
+
+func (h *ProjectHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	projectID, valid := parseProjectID(w, r)
+	if !valid {
+		return
+	}
+	memberID, valid := parseMemberUserID(w, r)
+	if !valid {
+		return
+	}
+
+	var req updateProjectMemberRequest
+	if !bind(w, r, &req) {
+		return
+	}
+
+	member, err := h.svc.UpdateMemberRole(r.Context(), userID, projectID, memberID, service.UpdateProjectMemberInput{
+		Role: entity.ProjectRole(req.Role),
+	})
+	if err != nil {
+		if handleProjectError(w, err) {
+			return
+		}
+		slog.Error("handler update project member role", "error", err)
+		internalError(w, "failed to update project member role")
+		return
+	}
+
+	ok(w, projectMemberToResponse(member))
+}
+
+func (h *ProjectHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	userID, hasUser := auth.UserIDFromContext(r.Context())
+	if !hasUser {
+		unauthorized(w, "authentication required")
+		return
+	}
+
+	projectID, valid := parseProjectID(w, r)
+	if !valid {
+		return
+	}
+	memberID, valid := parseMemberUserID(w, r)
+	if !valid {
+		return
+	}
+
+	err := h.svc.RemoveMember(r.Context(), userID, projectID, memberID)
+	if err != nil {
+		if handleProjectError(w, err) {
+			return
+		}
+		slog.Error("handler remove project member", "error", err)
+		internalError(w, "failed to remove project member")
 		return
 	}
 
@@ -206,6 +357,35 @@ func parseProjectID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func parseMemberUserID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("user_id"), 10, 64)
+	if err != nil {
+		badRequest(w, errorCodeBadRequest, "invalid user id", nil)
+		return 0, false
+	}
+	return id, true
+}
+
+func handleProjectError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, entity.ErrProjectNotFound):
+		notFound(w, "project not found")
+	case errors.Is(err, entity.ErrProjectMemberNotFound):
+		notFound(w, "project member not found")
+	case errors.Is(err, service.ErrDefaultProjectDelete):
+		conflict(w, "default project cannot be deleted")
+	case errors.Is(err, service.ErrForbidden):
+		forbidden(w, "insufficient project permissions")
+	case errors.Is(err, service.ErrInvalidProjectRole):
+		badRequest(w, errorCodeBadRequest, "invalid project role", nil)
+	case errors.Is(err, service.ErrLastProjectOwner):
+		conflict(w, "project must have at least one owner")
+	default:
+		return false
+	}
+	return true
 }
 
 func projectToResponse(p entity.Project) projectResponse {
@@ -230,5 +410,16 @@ func projectDetailsToResponse(p entity.ProjectDetails) projectDetailsResponse {
 		TotalTasks:     p.Stats.TotalTasks,
 		CompletedTasks: p.Stats.CompletedTasks,
 		ActiveTasks:    p.Stats.ActiveTasks,
+	}
+}
+
+func projectMemberToResponse(m entity.ProjectMember) projectMemberResponse {
+	return projectMemberResponse{
+		UserID:    m.UserID,
+		Email:     m.Email,
+		Name:      m.Name,
+		Role:      string(m.Role),
+		CreatedAt: m.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: m.UpdatedAt.Format(time.RFC3339),
 	}
 }
